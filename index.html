@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#FAF8F4">
+<meta name="description" content="本地相册：图片与本页面同目录，按 1.jpg 起依次编号，增删图片只需编辑 PHOTOS 列表。">
+<title>PCL</title>
+<!--
+  ┌ 设计决策 ─────────────────────────────────────────────────────────
+  │ 本页母题：№ 等宽编号系统 —— 页头"№ 01–06"、每张图角标、
+  │           灯箱计数器、页尾单行序号收束，四处呼应成节奏。
+  │ 三处非对称排版：① 图片墙 62/38 宽窄交替行 + 全幅主图（非等宽卡片堆）；
+  │                 ② 自然高度造成的有意参差（对齐顶部，不裁切任何照片）；
+  │                 ③ 灯箱计数胶囊在左上、页尾序号单行居中收束。
+  │ 文字面纪律：前台只有一行页头与一处页尾序号；维护说明全部放在
+  │             注释里（见下方 PHOTOS 配置区），不上屏。
+  │ 照片尺寸全兼容：图框不定死比例，按照片原始宽高比完整显示，
+  │             横图、竖图、全景图一律不裁切；灯箱同样按 contain 适配。
+  │
+  │ Token 对照表（技术约束禁用 CSS 变量，以下值全页硬编码并严格遵守）：
+  │   bg        #FAF8F4        米白纸底
+  │   surface   #FFFFFF        白色面板
+  │   ink       #201B16        正文近黑
+  │   ink-2     #6B6259        次级文字
+  │   ink-3     #A2988B        弱化文字 / 标签
+  │   line      rgba(32,27,22,.14)   1px 细线
+  │   accent    #B4470B        赭橙（全页唯一高饱和色，小面积点缀）
+  │   ph-a/ph-b #F1EBE1/#E4DCCE   加载占位
+  │   err-bg    #F4EFE7        错误面板底色
+  │   radius-l  14px / radius-s 6px
+  │   shadow    0 6px 18px rgba(32,27,22,.08)
+  │   ease      cubic-bezier(0.22,1,0.36,1)
+  │   字号 11/12/13/15   sans 系统栈 / mono ui-monospace 栈
+  │
+  │ 技术底线：单文件零依赖 / 纯 ES5（无 classList、fetch、IntersectionObserver、
+  │ 箭头函数、模板字符串）/ 无 CSS 变量、Grid、sticky、backdrop-filter /
+  │ 动画仅 transform 与 opacity / 滚动监听 120ms 节流 / 触控目标 ≥ 44px /
+  │ JS 渐进增强：渐入与懒加载只在 JS 可用时启用，脚本失败内容照常可读。
+  └──────────────────────────────────────────────────────────────────
+-->
+<style>
+  * {
+    margin: 0; padding: 0; box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC",
+      "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
+    background: #FAF8F4; color: #201B16; line-height: 1.6; font-size: 15px;
+    -webkit-font-smoothing: antialiased;
+  }
+  img { border: 0; vertical-align: middle; }
+  button { font-family: inherit; }
+  ::selection { background: rgba(180,71,11,.16); }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: #FAF8F4; }
+  ::-webkit-scrollbar-thumb { background: #D8CFC2; border-radius: 8px; border: 2px solid #FAF8F4; }
+  ::-webkit-scrollbar-thumb:hover { background: #C4B9A9; }
+
+  .wrap { max-width: 1120px; margin: 0 auto; padding-left: 20px; padding-right: 20px; }
+  @media (min-width: 960px) { .wrap { padding-left: 28px; padding-right: 28px; } }
+  .mono {
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+      "Liberation Mono", "Courier New", monospace;
+  }
+
+  /* ── 页头：一行 ─────────────────────────────── */
+  .top {
+    background: #FFFFFF; border-bottom: 1px solid rgba(32,27,22,.14);
+  }
+  .top-in {
+    display: -webkit-flex; display: flex;
+    -webkit-align-items: center; align-items: center;
+    -webkit-justify-content: space-between; justify-content: space-between;
+    padding-top: 17px; padding-bottom: 17px;
+  }
+  .top-title {
+    font-size: 14px; font-weight: 700; letter-spacing: .2em; color: #201B16;
+  }
+  .top-count { font-size: 12px; letter-spacing: .1em; color: #A2988B; }
+  .top-count b { color: #B4470B; font-weight: 600; }
+
+  /* ── 图片墙 ────────────────────────────────── */
+  .main { padding-top: 22px; padding-bottom: 64px; }
+  .gallery {
+    display: -webkit-flex; display: flex; -webkit-flex-wrap: wrap; flex-wrap: wrap;
+    -webkit-align-items: flex-start; align-items: flex-start;
+    margin: -9px;
+  }
+  .g-item { width: 100%; padding: 9px; }
+  .frame {
+    position: relative; display: block; width: 100%;
+    min-height: 140px; overflow: hidden;
+    border: 0; padding: 0; background: #E7E0D5;
+    border-radius: 14px; cursor: zoom-in;
+    box-shadow: 0 6px 18px rgba(32,27,22,.08);
+    -webkit-transform: translateZ(0); transform: translateZ(0);
+    -webkit-transition: -webkit-transform .32s cubic-bezier(0.22,1,0.36,1);
+    transition: transform .32s cubic-bezier(0.22,1,0.36,1);
+  }
+  .frame.ld { min-height: 0; }
+  .g-item:hover .frame { -webkit-transform: translate3d(0,-3px,0); transform: translate3d(0,-3px,0); }
+  .g-item:active .frame { -webkit-transform: scale3d(.985,.985,1); transform: scale3d(.985,.985,1); }
+  .frame::after {
+    content: ""; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    border-radius: 14px; border: 1px solid rgba(180,71,11,.5);
+    opacity: 0; pointer-events: none; z-index: 5;
+    -webkit-transition: opacity .3s ease; transition: opacity .3s ease;
+  }
+  .g-item:hover .frame::after { opacity: 1; }
+  .frame:focus { outline: 2px solid #B4470B; outline-offset: 2px; }
+
+  /* 占位（照片按原始比例加载，未加载前给最小高度） */
+  .ph {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    display: -webkit-flex; display: flex;
+    -webkit-align-items: center; align-items: center;
+    -webkit-justify-content: center; justify-content: center;
+    background: linear-gradient(135deg, #F1EBE1, #E4DCCE);
+    color: rgba(32,27,22,.22); font-size: 20px; letter-spacing: .12em;
+  }
+  .tile-img {
+    position: relative; display: block; width: 100%; height: auto;
+    opacity: 0;
+    -webkit-transition: opacity .5s ease; transition: opacity .5s ease;
+  }
+  .tile-img.ok { opacity: 1; }
+  .chip {
+    position: absolute; top: 10px; left: 10px; z-index: 6; padding: 4px 9px;
+    border-radius: 999px; background: rgba(250,248,244,.92); border: 1px solid rgba(32,27,22,.08);
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 11px; letter-spacing: .08em; color: #6B6259;
+    -webkit-user-select: none; user-select: none;
+  }
+  .cap {
+    position: absolute; left: 0; bottom: 0; width: 100%; z-index: 2;
+    padding: 30px 14px 11px; text-align: left; font-size: 13px; letter-spacing: .02em;
+    color: #FFFFFF; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    background: linear-gradient(to top, rgba(22,17,12,.58), rgba(22,17,12,0));
+  }
+  .err {
+    display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 4;
+    background: #F4EFE7; padding: 16px; text-align: center;
+    -webkit-flex-direction: column; flex-direction: column;
+    -webkit-align-items: center; align-items: center;
+    -webkit-justify-content: center; justify-content: center;
+  }
+  .err b { font-size: 14px; font-weight: 600; color: #201B16; margin-bottom: 6px; }
+  .err i {
+    font-style: normal; font-size: 12px; color: #B4470B;
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", "Courier New", monospace;
+    word-break: break-all; margin-bottom: 4px;
+  }
+  .err em { font-style: normal; font-size: 12px; color: #A2988B; }
+  .g-item.bad .err { display: -webkit-flex; display: flex; }
+  .g-item.bad .tile-img, .g-item.bad .ph { display: none; }
+
+  /* 宽窄交替：≥640 起用，行内配对等宽互补；照片高度全部自然生长 */
+  @media (min-width: 640px) {
+    .g-item { padding: 10px; }
+    .gallery { margin: -10px; }
+    .frame { min-height: 190px; }
+    .p-full { width: 100%; }
+    .p-a { width: 62%; }
+    .p-b { width: 38%; }
+  }
+
+  /* ── 页尾：单行序号收束 ─────────────────────── */
+  .end {
+    padding: 6px 0 44px; text-align: center;
+    font-size: 12px; letter-spacing: .3em; color: #A2988B;
+  }
+
+  /* ── 空态 ──────────────────────────────────── */
+  .empty {
+    border: 1px dashed rgba(32,27,22,.25); border-radius: 14px;
+    background: #FFFFFF; padding: 42px 26px; max-width: 640px; margin: 36px auto 0;
+  }
+  .empty-no {
+    font-size: 13px; color: #B4470B; letter-spacing: .14em; margin-bottom: 12px;
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", "Courier New", monospace;
+  }
+  .empty h2 { font-size: 18px; margin-bottom: 8px; letter-spacing: -.01em; }
+  .empty p { font-size: 13px; color: #6B6259; line-height: 1.8; }
+  .empty p i { font-style: normal; color: #B4470B; }
+
+  .nojs {
+    background: rgba(180,71,11,.10); border-bottom: 1px solid rgba(32,27,22,.14);
+    padding: 10px 20px; font-size: 13px; color: #201B16;
+  }
+
+  /* ── 灯箱 ──────────────────────────────────── */
+  .lb {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 60;
+    opacity: 0;
+    -webkit-transition: opacity .28s ease; transition: opacity .28s ease;
+  }
+  .lb.open { opacity: 1; }
+  .lb-scrim {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(26,21,16,.94); cursor: pointer;
+  }
+  .lb-body {
+    position: relative; z-index: 1; width: 100%; height: 100%; margin: 0;
+    padding: 64px 74px 84px;
+    display: -webkit-flex; display: flex;
+    -webkit-align-items: center; align-items: center;
+    -webkit-justify-content: center; justify-content: center;
+  }
+  #lbImg {
+    max-width: 100%; max-height: 100%; width: auto; height: auto;
+    border-radius: 6px; box-shadow: 0 18px 50px rgba(0,0,0,.45);
+    opacity: 0; -webkit-transform: scale(.965); transform: scale(.965);
+    -webkit-transition: opacity .3s ease, -webkit-transform .34s cubic-bezier(0.22,1,0.36,1);
+    transition: opacity .3s ease, transform .34s cubic-bezier(0.22,1,0.36,1);
+  }
+  .lb.open #lbImg.ok { opacity: 1; -webkit-transform: none; transform: none; }
+  .lb-top {
+    position: absolute; top: 0; left: 0; width: 100%; padding: 14px 16px;
+    display: -webkit-flex; display: flex;
+    -webkit-align-items: center; align-items: center;
+    -webkit-justify-content: space-between; justify-content: space-between; z-index: 2;
+  }
+  .lb-count {
+    color: rgba(255,255,255,.92); font-size: 12px; letter-spacing: .08em;
+    background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.22);
+    border-radius: 999px; padding: 7px 13px;
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", "Courier New", monospace;
+  }
+  .lb-count i { font-style: normal; color: rgba(255,255,255,.4); margin: 0 3px; }
+  .lb-btn {
+    width: 48px; height: 48px; border-radius: 999px;
+    border: 1px solid rgba(255,255,255,.25); background: rgba(255,255,255,.08);
+    color: #FFFFFF; cursor: pointer;
+    display: -webkit-flex; display: flex;
+    -webkit-align-items: center; align-items: center;
+    -webkit-justify-content: center; justify-content: center;
+    -webkit-transition: opacity .2s ease; transition: opacity .2s ease;
+  }
+  .lb-btn:hover { background: rgba(255,255,255,.2); }
+  .lb-btn:active { -webkit-transform: scale(.9); transform: scale(.9); }
+  .lb-btn:focus { outline: 2px solid #B4470B; outline-offset: 2px; }
+  .lb-nav { position: absolute; top: 50%; margin-top: -24px; z-index: 2; }
+  .lb-prev { left: 16px; }
+  .lb-next { right: 16px; }
+  .lb-cap {
+    position: absolute; left: 20px; bottom: 20px; max-width: 64%; z-index: 2;
+    color: rgba(255,255,255,.85); font-size: 12px; letter-spacing: .03em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", "Courier New", monospace;
+  }
+  .lb-cap i { font-style: normal; color: rgba(255,255,255,.4); }
+  @media (max-width: 600px) {
+    .lb-body { padding: 64px 12px 132px; }
+    .lb-nav { top: auto; bottom: 22px; margin-top: 0; }
+    .lb-cap {
+      left: 76px; right: 76px; bottom: 38px; max-width: none;
+      text-align: center; white-space: normal; line-height: 1.5;
+    }
+  }
+
+  /* ── 动效 ──────────────────────────────────── */
+  .rv {
+    -webkit-transition: opacity .55s cubic-bezier(0.22,1,0.36,1),
+                        -webkit-transform .55s cubic-bezier(0.22,1,0.36,1);
+    transition: opacity .55s cubic-bezier(0.22,1,0.36,1),
+                transform .55s cubic-bezier(0.22,1,0.36,1);
+  }
+  .rv-wait { opacity: 0; -webkit-transform: translate3d(0,20px,0); transform: translate3d(0,20px,0); }
+  @-webkit-keyframes fadeUp {
+    from { opacity: 0; -webkit-transform: translate3d(0,12px,0); }
+    to   { opacity: 1; -webkit-transform: none; }
+  }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translate3d(0,12px,0); }
+    to   { opacity: 1; transform: none; }
+  }
+  .in {
+    -webkit-animation: fadeUp .55s cubic-bezier(0.22,1,0.36,1) both;
+    animation: fadeUp .55s cubic-bezier(0.22,1,0.36,1) both;
+  }
+  .d2 { -webkit-animation-delay: .1s; animation-delay: .1s; }
+  @media (prefers-reduced-motion: reduce) {
+    .in { -webkit-animation: none; animation: none; }
+    .rv { -webkit-transition: none; transition: none; }
+  }
+</style>
+</head>
+<body>
+
+<noscript><div class="nojs">相册由页面内置脚本渲染，当前浏览器已禁用脚本，请开启后刷新。</div></noscript>
+
+<header class="top">
+  <div class="wrap top-in">
+    <span class="top-title mono in">PLC身份证</span>
+    <span class="top-count mono in d2">№ <b id="stCount">——</b></span>
+  </div>
+</header>
+
+<main class="main wrap">
+  <div id="gallery" class="gallery" aria-label="照片列表"></div>
+  <div class="empty" id="emptyBox" hidden>
+    <p class="empty-no">№ 00</p>
+    <h2>列表是空的</h2>
+    <p>往本文件 script 里的 <i>PHOTOS</i> 列表加一行文件名，保存刷新即可。</p>
+  </div>
+  <p class="end mono" id="endMark" aria-hidden="true"></p>
+</main>
+
+<div class="lb" id="lb" role="dialog" aria-modal="true" aria-label="图片查看" hidden>
+  <div class="lb-scrim" id="lbScrim"></div>
+  <figure class="lb-body">
+    <img id="lbImg" alt="">
+  </figure>
+  <div class="lb-top">
+    <span class="lb-count" id="lbCount">№ <i>/</i></span>
+    <button type="button" class="lb-btn" id="lbClose" aria-label="关闭（Esc）">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+  <button type="button" class="lb-btn lb-nav lb-prev" id="lbPrev" aria-label="上一张（←）">
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <button type="button" class="lb-btn lb-nav lb-next" id="lbNext" aria-label="下一张（→）">
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <p class="lb-cap" id="lbCap"></p>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ═══════════════════════════════════════════════════
+     图片列表 —— 增删图片只改这里（前台不显示这些说明）
+     file  ：文件名（与本页面同目录，如 '1.jpg'，也支持 'sub/1.jpg'）
+     label ：可选的一句话说明；留空 '' 前台只显示编号，不显示文字
+     加一行 = 多一张图；删一行 = 少一张图；上下顺序 = 展示顺序
+     照片任何宽高比都可混排，页面按原始比例完整显示，不裁切。
+     ═══════════════════════════════════════════════════ */
+  var PHOTOS = [
+    { file: '1.jpg', label: '' },
+    { file: '2.jpg', label: '' },
+    { file: '3.jpg', label: '' },
+    { file: '4.jpg', label: '' },
+    { file: '5.jpg', label: '' },
+    { file: '6.jpg', label: '' }
+  ];
+
+  /* 其余参数（一般不用动）——
+     EAGER  ：首屏直接加载的张数，其余滚动到附近再加载
+     PATTERN：桌面端宽度节奏，全幅 / 62% / 38% 交替；照片高度始终按原始比例 */
+  var EAGER = 4;
+  var PATTERN = ['p-full', 'p-a', 'p-b', 'p-b', 'p-a'];
+
+  /* ── 小工具 ───────────────────────────────────── */
+  function pad2(n) { n = +n; return n < 10 ? '0' + n : '' + n; }
+  function trim(s) { return ('' + s).replace(/^\s+|\s+$/g, ''); }
+  function esc(s) {
+    return ('' + s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function hasC(el, c) { return (' ' + el.className + ' ').indexOf(' ' + c + ' ') > -1; }
+  function addC(el, c) { if (!hasC(el, c)) el.className = trim(el.className + ' ' + c); }
+  function rmC(el, c) { el.className = trim((' ' + el.className + ' ').replace(' ' + c + ' ', ' ')); }
+  function addEvent(el, t, fn) {
+    if (el.addEventListener) el.addEventListener(t, fn, false);
+    else el.attachEvent('on' + t, fn);
+  }
+
+  /* ── 基础引用 ─────────────────────────────────── */
+  var gal = document.getElementById('gallery');
+  var emptyBox = document.getElementById('emptyBox');
+  var stCount = document.getElementById('stCount');
+  var endMark = document.getElementById('endMark');
+
+  var N = PHOTOS.length;
+  var lazyQ = [];
+  var revealQ = [];
+
+  /* ── 页头序号与页尾收束（真实数据，无虚构） ────── */
+  stCount.innerHTML = N ? pad2(1) + '&ndash;' + pad2(N) : '00';
+  if (N) endMark.innerHTML = '&mdash; ' + pad2(N) + ' &mdash;';
+  else endMark.style.display = 'none';
+
+  if (!N) {
+    gal.style.display = 'none';
+    emptyBox.hidden = false;
+  }
+
+  /* ── 生成图块 ─────────────────────────────────── */
+  function build(i) {
+    var p = PHOTOS[i];
+    var file = trim(p.file);
+    var label = p.label ? trim(p.label) : '';
+    var fig = document.createElement('figure');
+    fig.className = 'g-item rv ' + PATTERN[i % PATTERN.length];
+    fig.innerHTML =
+      '<button type="button" class="frame" aria-label="查看第 ' + (i + 1) + ' 张：' + esc(label || file) + '">' +
+        '<span class="ph" aria-hidden="true">№ ' + pad2(i + 1) + '</span>' +
+        '<span class="chip" aria-hidden="true">№ ' + pad2(i + 1) + '</span>' +
+        (label ? '<span class="cap">' + esc(label) + '</span>' : '') +
+        '<span class="err"><b>加载失败</b><i>' + esc(file) + '</i><em>文件未找到，检查文件名与所在目录</em></span>' +
+      '</button>';
+    var btn = fig.getElementsByTagName('button')[0];
+    var img = document.createElement('img');
+    img.className = 'tile-img';
+    img.alt = label || ('照片 ' + pad2(i + 1));
+    if (i < EAGER) {
+      img.src = file;
+    } else {
+      img.setAttribute('data-src', file);
+      lazyQ.push(img);
+    }
+    img.onload = function () { addC(img, 'ok'); addC(fig, 'ld'); };
+    img.onerror = function () { addC(fig, 'bad'); };
+    btn.appendChild(img);
+    addEvent(btn, 'click', function () { openLb(i); });
+    gal.appendChild(fig);
+  }
+
+  /* ── 滚动渐入 + 懒加载（节流 120ms）──────────── */
+  function tick() {
+    var vh = window.innerHeight || document.documentElement.clientHeight;
+    var batch = 0, k, el, r, im, ri;
+    for (k = revealQ.length - 1; k >= 0; k--) {
+      el = revealQ[k];
+      r = el.getBoundingClientRect();
+      /* 已滚过视口上方的元素也直接显示，避免快速滚动造成永久隐藏 */
+      if (r.top < vh - 30) {
+        el.style.webkitTransitionDelay = (batch * 70) + 'ms';
+        el.style.transitionDelay = (batch * 70) + 'ms';
+        batch++;
+        rmC(el, 'rv-wait');
+        revealQ.splice(k, 1);
+      }
+    }
+    for (k = lazyQ.length - 1; k >= 0; k--) {
+      im = lazyQ[k];
+      ri = im.getBoundingClientRect();
+      /* 进入或越过可视区都加载；远在视口下方的不动 */
+      if (ri.top < vh + 320) {
+        im.src = im.getAttribute('data-src');
+        im.removeAttribute('data-src');
+        lazyQ.splice(k, 1);
+      }
+    }
+  }
+  function initReveal() {
+    var els = document.getElementsByClassName('rv');
+    revealQ = [];
+    for (var k = 0; k < els.length; k++) {
+      var r = els[k].getBoundingClientRect();
+      if (r.top > window.innerHeight - 40) {
+        addC(els[k], 'rv-wait');
+        revealQ.push(els[k]);
+      }
+    }
+  }
+  var lastT = 0;
+  function onScroll() {
+    var now = +new Date();
+    if (now - lastT < 120) return;
+    lastT = now;
+    tick();
+  }
+
+  /* ── 灯箱 ─────────────────────────────────────── */
+  var lb = document.getElementById('lb');
+  var lbImg = document.getElementById('lbImg');
+  var lbCount = document.getElementById('lbCount');
+  var lbCap = document.getElementById('lbCap');
+  var lbClose = document.getElementById('lbClose');
+  var lbPrev = document.getElementById('lbPrev');
+  var lbNext = document.getElementById('lbNext');
+  var cur = 0, lastFocus = null, hideTimer = null;
+
+  function fileOf(i) { return trim(PHOTOS[i].file); }
+  function labelOf(i) { return PHOTOS[i].label ? trim(PHOTOS[i].label) : ''; }
+  function preload(i) {
+    if (i < 0 || i >= N) return;
+    var im = new Image();
+    im.src = fileOf(i);
+  }
+  function setLb(i) {
+    if (!N) return;
+    cur = ((i % N) + N) % N;
+    var label = labelOf(cur), file = fileOf(cur);
+    rmC(lbImg, 'ok');
+    lbImg.onload = function () { addC(lbImg, 'ok'); preload(cur + 1); preload(cur - 1); };
+    lbImg.onerror = function () { lbCap.innerHTML = esc(file) + ' · 加载失败，文件可能已删除'; };
+    lbImg.alt = label || ('照片 ' + pad2(cur + 1));
+    lbImg.src = file;
+    lbCount.innerHTML = '№ ' + pad2(cur + 1) + ' <i>/</i> ' + pad2(N);
+    lbCap.innerHTML = label ? esc(label) + ' <i>—</i> ' + esc(file) : esc(file);
+  }
+  function openLb(i) {
+    lastFocus = document.activeElement;
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+    lb.hidden = false;
+    void lb.offsetWidth;
+    addC(lb, 'open');
+    addC(document.body, 'lb-on');
+    setLb(i);
+    lbClose.focus();
+  }
+  function closeLb() {
+    rmC(lb, 'open');
+    rmC(document.body, 'lb-on');
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = setTimeout(function () { lb.hidden = true; }, 300);
+    try { lastFocus.focus(); } catch (e) {}
+  }
+
+  addEvent(lbClose, 'click', closeLb);
+  addEvent(lbPrev, 'click', function () { setLb(cur - 1); });
+  addEvent(lbNext, 'click', function () { setLb(cur + 1); });
+  addEvent(document.getElementById('lbScrim'), 'click', closeLb);
+  addEvent(document, 'keydown', function (e) {
+    if (lb.hidden) return;
+    e = e || window.event;
+    var k = e.keyCode;
+    if (k === 27) closeLb();
+    else if (k === 37) setLb(cur - 1);
+    else if (k === 39) setLb(cur + 1);
+  });
+  var tx = 0, ty = 0;
+  addEvent(lb, 'touchstart', function (e) {
+    if (e.touches && e.touches.length === 1) {
+      tx = e.touches[0].clientX; ty = e.touches[0].clientY;
+    }
+  });
+  addEvent(lb, 'touchend', function (e) {
+    var t = e.changedTouches && e.changedTouches[0];
+    if (!t) return;
+    var dx = t.clientX - tx, dy = t.clientY - ty;
+    if (Math.abs(dx) > 46 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+      if (dx < 0) setLb(cur + 1); else setLb(cur - 1);
+    }
+  });
+  addEvent(window, 'scroll', onScroll);
+  addEvent(window, 'resize', onScroll);
+
+  /* ── 启动 ─────────────────────────────────────── */
+  for (var i = 0; i < N; i++) build(i);
+  initReveal();
+  tick();
+})();
+</script>
+</body>
+</html>
